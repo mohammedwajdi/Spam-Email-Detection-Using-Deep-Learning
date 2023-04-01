@@ -1,0 +1,224 @@
+!pip install numpy pandas tensorflow scikit-learn
+
+import os
+import requests
+import zipfile
+import tarfile
+import tempfile
+import re
+from bs4 import BeautifulSoup
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from keras.models import Sequential
+from keras.layers import Dense, Dropout
+from keras.optimizers import Adam
+from keras.callbacks import EarlyStopping
+import numpy as np
+import pandas as pd
+
+!pip install google-colab
+
+import os
+import zipfile
+import tarfile
+from google.colab import files
+
+def upload_and_extract_zip():
+    uploaded = files.upload()
+    for file_name in uploaded.keys():
+        if file_name.endswith(".zip"):
+            with zipfile.ZipFile(file_name, 'r') as archive:
+                archive.extractall('spamassassin')
+        else:
+            print(f"Skipping {file_name}. Upload only .zip files.")
+        os.remove(file_name)
+
+def upload_and_extract_tar_gz():
+    uploaded = files.upload()
+    for file_name in uploaded.keys():
+        if file_name.endswith(".tar.gz"):
+            with tarfile.open(file_name, 'r:gz') as archive:
+                archive.extractall('enron-spam')
+        else:
+            print(f"Skipping {file_name}. Upload only .tar.gz files.")
+        os.remove(file_name)
+
+print("Upload SpamAssassin .zip dataset files:")
+upload_and_extract_zip()
+
+print("\nUpload Enron-Spam .tar.gz dataset files:")
+upload_and_extract_tar_gz()
+
+# Load and preprocess emails
+def preprocess_text(text):
+    return text.lower()
+
+def load_emails(folder, label):
+    emails = []
+    for filename in os.listdir(folder):
+        with open(os.path.join(folder, filename), 'r', errors='ignore') as f:
+            content = f.read()
+            emails.append((preprocess_text(content), label))
+    return emails
+
+easy_ham = load_emails('spamassassin/easy_ham', 'ham')
+hard_ham = load_emails('spamassassin/hard_ham', 'ham')
+spam = load_emails('spamassassin/spam', 'spam')
+
+enron_ham = []
+enron_spam = []
+for i in range(1, 7):
+    enron_ham.extend(load_emails(f'enron-spam/enron{i}/ham', 'ham'))
+    enron_spam.extend(load_emails(f'enron-spam/enron{i}/spam', 'spam'))
+
+# Combine datasets
+all_emails = easy_ham + hard_ham + spam + enron_ham + enron_spam
+
+# Shuffle and split the dataset
+import random
+
+random.shuffle(all_emails)
+
+train_size = int(0.8 * len(all_emails))
+train_emails = all_emails[:train_size]
+test_emails = all_emails[train_size:]
+
+print(f"Number of training emails: {len(train_emails)}")
+print(f"Number of testing emails: {len(test_emails)}")
+
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# Define the maximum number of words in the tokenizer
+max_words = 10000
+
+# Initialize the tokenizer
+tokenizer = Tokenizer(num_words=max_words, oov_token='<OOV>')
+tokenizer.fit_on_texts(texts)
+
+# Tokenize the texts
+sequences = tokenizer.texts_to_sequences(texts)
+
+# Define the maximum sequence length
+max_sequence_length = 250
+
+# Pad the sequences
+padded_sequences = pad_sequences(sequences, maxlen=max_sequence_length, padding='post', truncating='post')
+
+from sklearn.preprocessing import LabelEncoder
+
+# Initialize the label encoder
+encoder = LabelEncoder()
+
+# Encode the labels
+encoded_labels = encoder.fit_transform(labels)
+
+from sklearn.model_selection import train_test_split
+
+# Split the data into training and validation sets
+X_train, X_val, y_train, y_val = train_test_split(padded_sequences, encoded_labels, test_size=0.2, random_state=42)
+
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, Bidirectional, LSTM, Dense, Dropout
+
+model = Sequential([
+    Embedding(max_words, 64, input_length=max_sequence_length),
+    Bidirectional(LSTM(64, return_sequences=True)),
+    Bidirectional(LSTM(64)),
+    Dense(32, activation='relu'),
+    Dropout(0.5),
+    Dense(1, activation='sigmoid')
+])
+
+# Compile the model
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Display the model summary
+model.summary()
+
+# Set the training parameters
+epochs = 10
+batch_size = 64
+
+# Train the model
+history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(X_val, y_val))
+
+import matplotlib.pyplot as plt
+
+# Plot the training and validation accuracy
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+# Plot the training and validation loss
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Training and Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+def classify_email(text):
+    # Preprocess the input text
+    preprocessed_text = preprocess_text(text)
+    
+    # Tokenize and pad the input text
+    sequence = tokenizer.texts_to_sequences([preprocessed_text])
+    padded_sequence = pad_sequences(sequence, maxlen=max_sequence_length, padding='post', truncating='post')
+    
+    # Predict the label
+    prediction = model.predict(padded_sequence)
+    
+    # Decode the label
+    label = encoder.inverse_transform([int(round(prediction[0][0]))])[0]
+    
+    return label
+
+import ipywidgets as widgets
+from IPython.display import display
+
+# Create a text input area
+text_input = widgets.Textarea(
+    value='',
+    placeholder='Enter the email text you want to classify here.',
+    description='Email:',
+    disabled=False,
+    layout=widgets.Layout(width='80%', height='200px')
+)
+
+# Create a classify button
+classify_button = widgets.Button(description='Classify Email')
+
+# Display the text input area and the button
+display(text_input)
+display(classify_button)
+# Create a function to handle button clicks
+def on_button_click(button):
+    # Get the input email text
+    new_email = text_input.value
+
+    # Classify the new email and get the prediction probability
+    preprocessed_text = preprocess_text(new_email)
+    sequence = tokenizer.texts_to_sequences([preprocessed_text])
+    padded_sequence = pad_sequences(sequence, maxlen=max_sequence_length, padding='post', truncating='post')
+    prediction = model.predict(padded_sequence)
+    
+    # Decode the label and get the prediction probability
+    label = encoder.inverse_transform([int(round(prediction[0][0]))])[0]
+    confidence = prediction[0][0] if label == 'spam' else 1 - prediction[0][0]
+
+    # Print the result and confidence
+    print(f"The email is classified as: {label} with a confidence of {confidence:.2%}")
+
+classify_button.on_click(on_button_click)
+
